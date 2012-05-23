@@ -1,2 +1,1 @@
---upgrade
 librarypaste>=1.2
