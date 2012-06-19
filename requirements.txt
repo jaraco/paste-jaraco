@@ -1,4 +1,4 @@
 -f http://dl.dropbox.com/u/54081/cheeseshop/index.html
 cherrypy >= 3.2.3dev-20120408, <3.3dev
 pymongo >= 2.0
-librarypaste >= 1.2
+librarypaste >= 1.3
