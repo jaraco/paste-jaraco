@@ -1,79 +1,71 @@
 from __future__ import print_function
 
 import sys
-import urllib2
-import json
 import pprint
-import urlparse
 
+try:
+	import urllib.parse as urllib_parse
+except ImportError:
+	import urlparse as urllib_parse
+
+import requests
 import keyring.http
-import jaraco.net.http
 
 def url(subpath):
-	#return urlparse.urljoin('http://localhost:8080/apps/past-jaraco', subpath)
-	return urlparse.urljoin('https://api.heroku.com/apps/paste-jaraco/',
+	return urllib_parse.urljoin('https://api.heroku.com/apps/paste-jaraco/',
 		subpath)
 
-class FixedUserKeyringPasswordManager(keyring.http.PasswordMgr):
-	def __init__(self, username):
-		self.username = username
+def parse_auth_realm(resp):
+	"""
+	From a 401 response, parse out the realm for basic auth.
+	"""
+	header = resp.headers['www-authenticate']
+	mode, _sep, dict = header.partition(' ')
+	assert mode.lower() == 'basic'
+	return requests.utils.parse_dict_header(dict)['realm']
 
-	def get_username(self, realm, authuri):
-		print('realm is', realm)
-		print('authuri is', authuri)
-		return self.username
+def get_auth(username, realm):
+	return username, keyring.get_password(realm, username)
 
-	# provide clear_password until delete_password is officially
-	#  implemented.
-	def clear_password(self, realm, authuri):
-		user = self.get_username(realm, authuri)
-		# this call will only succeed on WinVault for now
-		keyring.get_keyring().delete_password(realm, user)
-
-def install_opener():
-	auth_manager = FixedUserKeyringPasswordManager(username='')
-	auth_handler = urllib2.HTTPBasicAuthHandler(auth_manager)
-	# build a new opener
-	opener = urllib2.build_opener(auth_handler)
-	# install it
-	urllib2.install_opener(opener)
-
+def request(*args, **kwargs):
+	"""
+	Use requests on a resource, but retry with auth
+	"""
+	resp = requests.request(*args, **kwargs)
+	if resp.status_code == 401:
+		realm = parse_auth_realm(resp)
+		kwargs['auth'] = get_auth('jaraco', realm)
+		resp = requests.request(*args, **kwargs)
+	return resp
 
 def add_MongoHQ():
 	headers = {
 		'Accept': 'application/json',
 	}
-	req = jaraco.net.http.MethodRequest(
-		url = url('addons/mongohq'),
-		method = 'POST', headers=headers,
-	)
-	install_opener()
-	res = urllib2.urlopen(req)
-	assert res.code == 200
-	pprint.pprint(json.loads(res.read()))
+	resp = request(method='POST', url=url('addons/mongohq'), headers=headers)
+	resp.raise_for_status()
+	pprint.pprint(resp.json())
 
 def add_hostname():
 	headers = {
 		'Accept': 'application/json',
 	}
 	data = 'domain_name[domain]=paste.jaraco.com'
-	install_opener()
 
-	req = jaraco.net.http.MethodRequest(
-		url=url('domains'), headers=headers, data=data, method='POST')
-	try:
-		res = urllib2.urlopen(req)
-	except urllib2.HTTPError as err:
-		errors = json.loads(err.read())
-		if isinstance(errors, list):
-			for error in errors:
-				print(':'.join(error), file=sys.stderr)
-		else:
-			print(pprint.pformat(errors), file=sys.stderr)
+	resp = request(url=url('domains'), headers=headers, data=data,
+		method='POST')
+	result = resp.json()
+	if not resp.ok:
+		handle_error(result)
 		return
+	pprint.pprint(result)
 
-	assert 200 <= res.code < 300
-	pprint.pprint(json.loads(res.read()))
+def handle_error(errors):
+	if isinstance(errors, list):
+		for error in errors:
+			print(':'.join(error), file=sys.stderr)
+	else:
+		print(pprint.pformat(errors), file=sys.stderr)
 
 
 if __name__ == '__main__':
